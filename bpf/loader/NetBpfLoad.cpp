@@ -447,8 +447,39 @@ int readCodeSections(ElfObject& elfObj, vector<codeSection>& cs) {
     return 0;
 }
 
+static bool kernelSupportsMmapableArray() {
+    // A KVER override describes Android's BPF feature gates, but it does not
+    // prove that this optional array-map flag was backported. Probe the flag
+    // directly so older kernels can use the same array through map syscalls.
+    static const bool supported = []() {
+        union bpf_attr req = {
+          .map_type = BPF_MAP_TYPE_ARRAY,
+          .key_size = sizeof(uint32_t),
+          .value_size = sizeof(uint64_t),
+          .max_entries = 1,
+          .map_flags = BPF_F_MMAPABLE,
+        };
+        unique_fd fd(bpf(BPF_MAP_CREATE, req));
+        if (fd.ok()) return true;
+
+        const int err = errno;
+        if (err == EINVAL || err == EOPNOTSUPP) {
+            ALOGI("Kernel lacks BPF_F_MMAPABLE; using regular array maps");
+            return false;
+        }
+
+        // Preserve failures unrelated to feature support for the real map
+        // creation to report instead of silently changing its flags.
+        ALOGW("BPF_F_MMAPABLE capability probe failed unexpectedly, errno: %d", err);
+        return true;
+    }();
+    return supported;
+}
+
 static unsigned int sanitizeMapFlags(unsigned int map_flags) {
-    if (!isAtLeastKernelVersion(5, 10)) map_flags &= ~BPF_F_MMAPABLE;
+    if ((map_flags & BPF_F_MMAPABLE) && !kernelSupportsMmapableArray()) {
+        map_flags &= ~BPF_F_MMAPABLE;
+    }
     return map_flags;
 }
 
@@ -627,6 +658,32 @@ static int sanitizeBtf(struct btf *btf) {
     return 0;
 }
 
+static bool kernelSupportsBtfKinds() {
+    // A KVER override advertises backported BPF program capabilities, but it
+    // does not prove that the kernel's BTF parser supports these type kinds.
+    // Probe the complete set that sanitizeBtf() translates for older kernels.
+    static const bool supported = []() {
+        struct btf *probe = btf__new_empty();
+        if (!probe) return false;
+
+        int intType = btf__add_int(probe, "probe_int", sizeof(uint32_t), BTF_INT_SIGNED);
+        int protoType = intType < 0 ? -1 : btf__add_func_proto(probe, 0);
+        int funcType = protoType < 0 ? -1 :
+                btf__add_func(probe, "probe_func", BTF_FUNC_STATIC, protoType);
+        int varType = intType < 0 ? -1 :
+                btf__add_var(probe, "probe_var", BTF_VAR_STATIC, intType);
+        int dataSecType = varType < 0 ? -1 : btf__add_datasec(probe, ".data", sizeof(uint32_t));
+        int dataSecVar = dataSecType < 0 ? -1 :
+                btf__add_datasec_var_info(probe, varType, 0, sizeof(uint32_t));
+
+        bool supported = funcType >= 0 && dataSecVar >= 0 &&
+                btf__load_into_kernel(probe) >= 0;
+        btf__free(probe);
+        return supported;
+    }();
+    return supported;
+}
+
 static int loadBtf(ElfObject &elfObj, struct btf *btf) {
     int ret;
     for (unsigned int i = 1; i < btf__type_cnt(btf); ++i) {
@@ -638,8 +695,9 @@ static int loadBtf(ElfObject &elfObj, struct btf *btf) {
         if (ret) return ret;
     }
 
-    if (!isAtLeastKernelVersion(5, 10)) {
-        // Likely unnecessary on kernel 5.4 but untested.
+    if (!isAtLeastKernelVersion(5, 10) || !kernelSupportsBtfKinds()) {
+        // Keep the old-kernel conversion if the parser lacks any required kind,
+        // even when the KVER override enables newer BPF program gates.
         sanitizeBtf(btf);
     }
 
@@ -791,7 +849,40 @@ static bool isMapTypeSupported(enum bpf_map_type type) {
         // On Linux Kernels older than 4.14 this map type doesn't exist - autoskip.
         return false;
     }
+    if (type == BPF_MAP_TYPE_SK_STORAGE && programKernelVer < KVER(5, 10, 0)) {
+        // Connectivity's SK_STORAGE map is only referenced by its 5.10
+        // inet_create variant. A lower program KVER skips that variant, so
+        // don't create this map just because the global KVER override passes
+        // the map descriptor's 5.10 version gate.
+        ALOGI("Skipping SK_STORAGE map for program KVER 0x%x", programKernelVer);
+        return false;
+    }
     return true;
+}
+
+static bool kernelSupportsDevmapHash() {
+    // ro.bpf.kver_override can enable BPF programs with newer kernel gates,
+    // but it cannot add a map type to the running kernel. Probe DEVMAP_HASH
+    // directly because older kernels can provide the UAPI enum without map ops.
+    static const bool supported = []() {
+        union bpf_attr req = {
+          .map_type = BPF_MAP_TYPE_DEVMAP_HASH,
+          .key_size = sizeof(uint32_t),
+          .value_size = sizeof(uint32_t),
+          .max_entries = 1,
+        };
+        unique_fd fd(bpf(BPF_MAP_CREATE, req));
+        if (fd.ok()) return true;
+
+        const int err = errno;
+        if (err == EINVAL || err == EOPNOTSUPP) return false;
+
+        // Do not silently downgrade for unrelated failures such as resource
+        // exhaustion or missing permissions; let the real create report it.
+        ALOGW("DEVMAP_HASH capability probe failed unexpectedly, errno: %d", err);
+        return true;
+    }();
+    return supported;
 }
 
 static enum bpf_map_type sanitizeMapType(enum bpf_map_type type) {
@@ -805,15 +896,18 @@ static enum bpf_map_type sanitizeMapType(enum bpf_map_type type) {
         // Hence using an ARRAY instead of a DEVMAP simply makes life easier for userspace.
         return BPF_MAP_TYPE_ARRAY;
     }
-    if (type == BPF_MAP_TYPE_DEVMAP_HASH && !isAtLeastKernelVersion(5, 4)) {
+    if (type == BPF_MAP_TYPE_DEVMAP_HASH &&
+            (!isAtLeastKernelVersion(5, 4) || !kernelSupportsDevmapHash())) {
         // On Linux Kernels older than 5.4 this map type doesn't exist, but it can kind
-        // of be approximated: HASH has the same userspace visible api.
+        // of be approximated: HASH has the same userspace visible api. Also probe
+        // the map type itself, since a KVER override does not prove it was backported.
         // However it cannot be used by ebpf programs in the same way.
         // Since bpf_redirect_map() only requires 4.14, a program using a DEVMAP_HASH map
         // would fail to load (due to trying to redirect to a HASH instead of DEVMAP_HASH).
         // One must thus tag any BPF_MAP_TYPE_DEVMAP_HASH + bpf_redirect_map() using
         // programs as being 5.4+...
-        return  BPF_MAP_TYPE_HASH;
+        ALOGI("Using HASH compatibility map for unsupported DEVMAP_HASH map");
+        return BPF_MAP_TYPE_HASH;
     }
     // No sanitization is required.
     return type;
