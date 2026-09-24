@@ -36,6 +36,7 @@ using base::unique_fd;
 using base::WaitForProperty;
 using bpf::getSocketCookie;
 using bpf::isAtLeastKernelVersion;
+using bpf::isAtLeastProgramKernelVersion;
 using bpf::isAtLeastT;
 using bpf::isAtLeastU;
 using bpf::isAtLeastV;
@@ -121,12 +122,12 @@ static Status initPrograms(const char* cg2_path) {
     // cgroup if the program is pinned properly.
     // TODO: delete the if statement once all devices should support cgroup
     // socket filter (ie. the minimum kernel version required is 4.14).
-    if (isAtLeastKernelVersion(4, 14)) {
+    if (isAtLeastProgramKernelVersion(4, 14)) {
         RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_INET_CREATE_PROG_PATH,
                                     cg_fd, BPF_CGROUP_INET_SOCK_CREATE));
     }
 
-    if (isAtLeastKernelVersion(5, 10)) {
+    if (isAtLeastProgramKernelVersion(5, 10)) {
         RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_INET_RELEASE_PROG_PATH,
                                     cg_fd, BPF_CGROUP_INET_SOCK_RELEASE));
     }
@@ -134,7 +135,7 @@ static Status initPrograms(const char* cg2_path) {
     if (isAtLeastV) {
         // V requires 4.19+, so technically this 2nd 'if' is not required, but it
         // doesn't hurt us to try to support AOSP forks that try to support older kernels.
-        if (isAtLeastKernelVersion(4, 19)) {
+        if (isAtLeastProgramKernelVersion(4, 19)) {
             RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_CONNECT4_PROG_PATH,
                                         cg_fd, BPF_CGROUP_INET4_CONNECT));
             RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_CONNECT6_PROG_PATH,
@@ -149,7 +150,7 @@ static Status initPrograms(const char* cg2_path) {
                                         cg_fd, BPF_CGROUP_UDP6_SENDMSG));
         }
 
-        if (isAtLeastKernelVersion(5, 4)) {
+        if (isAtLeastProgramKernelVersion(5, 4)) {
             RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_GETSOCKOPT_PROG_PATH,
                                         cg_fd, BPF_CGROUP_GETSOCKOPT));
             RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_SETSOCKOPT_PROG_PATH,
@@ -157,7 +158,7 @@ static Status initPrograms(const char* cg2_path) {
         }
     }
 
-    if (isAtLeastKernelVersion(4, 19)) {
+    if (isAtLeastProgramKernelVersion(4, 19)) {
         RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_BIND4_PROG_PATH,
                 cg_fd, BPF_CGROUP_INET4_BIND));
         RETURN_IF_NOT_OK(attachProgramToCgroup(CGROUP_BIND6_PROG_PATH,
@@ -172,14 +173,14 @@ static Status initPrograms(const char* cg2_path) {
         if (queryProgram(cg_fd, BPF_CGROUP_INET6_BIND) <= 0) abort();
     }
 
-    if (isAtLeastKernelVersion(5, 10)) {
+    if (isAtLeastProgramKernelVersion(5, 10)) {
         if (queryProgram(cg_fd, BPF_CGROUP_INET_SOCK_RELEASE) <= 0) abort();
     }
 
     if (isAtLeastV) {
         // V requires 4.19+, so technically this 2nd 'if' is not required, but it
         // doesn't hurt us to try to support AOSP forks that try to support older kernels.
-        if (isAtLeastKernelVersion(4, 19)) {
+        if (isAtLeastProgramKernelVersion(4, 19)) {
             if (queryProgram(cg_fd, BPF_CGROUP_INET4_CONNECT) <= 0) abort();
             if (queryProgram(cg_fd, BPF_CGROUP_INET6_CONNECT) <= 0) abort();
             if (queryProgram(cg_fd, BPF_CGROUP_UDP4_RECVMSG) <= 0) abort();
@@ -188,7 +189,7 @@ static Status initPrograms(const char* cg2_path) {
             if (queryProgram(cg_fd, BPF_CGROUP_UDP6_SENDMSG) <= 0) abort();
         }
 
-        if (isAtLeastKernelVersion(5, 4)) {
+        if (isAtLeastProgramKernelVersion(5, 4)) {
             if (queryProgram(cg_fd, BPF_CGROUP_GETSOCKOPT) <= 0) abort();
             if (queryProgram(cg_fd, BPF_CGROUP_SETSOCKOPT) <= 0) abort();
         }
@@ -376,9 +377,10 @@ int BpfHandler::tagSocket(int sockFd, uint32_t tag, uid_t chargeUid, uid_t realU
         return -EAFNOSUPPORT;
     }
 
-    // On 5.10+ the BPF_CGROUP_INET_SOCK_RELEASE hook takes care of cookie tag map cleanup
-    // during socket destruction. As such the socket destroy listener is superfluous.
-    if (!isAtLeastKernelVersion(5, 10)) {
+    // When the selected BPF program set includes the 5.10+ BPF_CGROUP_INET_SOCK_RELEASE hook,
+    // that hook takes care of cookie tag map cleanup during socket destruction. Otherwise keep
+    // the socket destroy listener, even if a global KVER override is higher than the program KVER.
+    if (!isAtLeastProgramKernelVersion(5, 10)) {
         int socketProto;
         socklen_t protoLen = sizeof(socketProto);
         if (getsockopt(sockFd, SOL_SOCKET, SO_PROTOCOL, &socketProto, &protoLen)) {

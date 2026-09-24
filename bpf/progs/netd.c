@@ -636,6 +636,13 @@ DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, ingress_stats, 5_4_25q2, 5_4, 5_10,
     return bpf_traffic_account(skb, INGRESS, KVER_5_4, SDK_LEVEL_25Q2);
 }
 
+// Android 25Q2 4.19 fallback: use legacy GSO accounting and avoid skb->sk.
+DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, ingress_stats, 4_19_25q2, 4_19, 5_4,
+                            BPFLOADER_MAINLINE_25Q2_VERSION, BPFLOADER_MAX_VER)
+(struct __sk_buff* skb) {
+    return bpf_traffic_account(skb, INGRESS, KVER_4_19, SDK_LEVEL_25Q2);
+}
+
 // Android U/V 5.10+ (tracing)
 DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, ingress_stats, 5_10_u, 5_10, INF,
                             BPFLOADER_MAINLINE_U_VERSION, BPFLOADER_MAINLINE_25Q2_VERSION)
@@ -650,9 +657,10 @@ DEFINE_NETD_BPF_PROG_KVER_RANGE(cgroupskb, ingress_stats, 5_4, 5_4, INF)
 }
 
 // Android T/U/V 4.19
-DEFINE_NETD_BPF_PROG_KVER_RANGE(cgroupskb, ingress_stats, 4_19, 4_19, 5_4)
+DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, ingress_stats, 4_19, 4_19, 5_4,
+                            BPFLOADER_MIN_VER, BPFLOADER_MAINLINE_25Q2_VERSION)
 (struct __sk_buff* skb) {
-return bpf_traffic_account(skb, INGRESS, KVER_4_19, SDK_LEVEL_T);
+    return bpf_traffic_account(skb, INGRESS, KVER_4_19, SDK_LEVEL_T);
 }
 
 // Android T 4.9 & T/U 4.14
@@ -677,6 +685,13 @@ DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, egress_stats, 5_4_25q2, 5_4, 5_10,
     return bpf_traffic_account(skb, EGRESS, KVER_5_4, SDK_LEVEL_25Q2);
 }
 
+// Android 25Q2 4.19 fallback: use legacy GSO accounting and avoid skb->sk.
+DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, egress_stats, 4_19_25q2, 4_19, 5_4,
+                            BPFLOADER_MAINLINE_25Q2_VERSION, BPFLOADER_MAX_VER)
+(struct __sk_buff* skb) {
+    return bpf_traffic_account(skb, EGRESS, KVER_4_19, SDK_LEVEL_25Q2);
+}
+
 // Android U/V 5.10+ (tracing)
 DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, egress_stats, 5_10_u, 5_10, INF,
                             BPFLOADER_MAINLINE_U_VERSION, BPFLOADER_MAINLINE_25Q2_VERSION)
@@ -691,9 +706,10 @@ DEFINE_NETD_BPF_PROG_KVER_RANGE(cgroupskb, egress_stats, 5_4, 5_4, INF)
 }
 
 // Android T/U/V 4.19
-DEFINE_NETD_BPF_PROG_KVER_RANGE(cgroupskb, egress_stats, 4_19, 4_19, 5_4)
+DEFINE_NETD_BPF_PROG_RANGES(cgroupskb, egress_stats, 4_19, 4_19, 5_4,
+                            BPFLOADER_MIN_VER, BPFLOADER_MAINLINE_25Q2_VERSION)
 (struct __sk_buff* skb) {
-return bpf_traffic_account(skb, EGRESS, KVER_4_19, SDK_LEVEL_T);
+    return bpf_traffic_account(skb, EGRESS, KVER_4_19, SDK_LEVEL_T);
 }
 
 // Android T 4.9 & T/U 4.14

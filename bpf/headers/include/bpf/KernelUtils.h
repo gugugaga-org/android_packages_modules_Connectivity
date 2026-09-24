@@ -44,6 +44,25 @@ static inline unsigned uncachedKernelVersion() {
 
 static const unsigned kernelVer = uncachedKernelVersion();
 
+// Some devices backport BPF maps/helpers without backporting every program
+// context field. Keep the global KVER override for map/loader gates, but let a
+// device select the matching kernel-specific program variants independently.
+static inline unsigned uncachedProgramKernelVersion() {
+    char program_kver_override[PROP_VALUE_MAX];
+    int program_kver_override_len =
+            __system_property_get("ro.bpf.program_kver_override", program_kver_override);
+    if (program_kver_override_len == 0) return kernelVer;
+
+    unsigned kver_major = 0;
+    unsigned kver_minor = 0;
+    unsigned kver_sub = 0;
+    if (sscanf(program_kver_override, "%u.%u.%u", &kver_major, &kver_minor, &kver_sub) < 2)
+        abort();
+    return KVER(kver_major, kver_minor, kver_sub);
+}
+
+static const unsigned programKernelVer = uncachedProgramKernelVersion();
+
 static inline unsigned __unused kernelVersion() {
     return kernelVer;
 }
@@ -89,6 +108,15 @@ static inline bool isAtLeastKernelVersion(unsigned major, unsigned minor, unsign
     unsigned k = KVER(major, minor, sub);
     if (k <= minSupportedKernelVer) return true;
     return kernelVer >= k;
+}
+
+// Select BPF program variants using the version that the loader used. Some
+// devices backport maps/helpers and set kernelVer above the version of their
+// program contexts, so kernelVer alone can claim a program is available when
+// the loader deliberately skipped that program section.
+static inline bool isAtLeastProgramKernelVersion(unsigned major, unsigned minor,
+                                                 unsigned sub = 0) {
+    return programKernelVer >= KVER(major, minor, sub);
 }
 
 static inline bool isKernelVersion(unsigned major, unsigned minor) {

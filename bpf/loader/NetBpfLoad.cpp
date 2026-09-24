@@ -1173,8 +1173,8 @@ static int loadCodeSections(ElfObject& elfObj, vector<codeSection>& cs, const st
               cs[i].prog_def->min_kver, cs[i].prog_def->max_kver,
               cs[i].prog_def->bpfloader_min_ver, cs[i].prog_def->bpfloader_max_ver);
 
-        if (kernelVer < cs[i].prog_def->min_kver) continue;
-        if (kernelVer >= cs[i].prog_def->max_kver) continue;
+        if (programKernelVer < cs[i].prog_def->min_kver) continue;
+        if (programKernelVer >= cs[i].prog_def->max_kver) continue;
         if (api_level_full < cs[i].prog_def->bpfloader_min_ver) continue;
         if (api_level_full >= cs[i].prog_def->bpfloader_max_ver) continue;
 
@@ -1296,9 +1296,9 @@ static int prepareLoadProgs(const struct bpf_object* obj, const vector<codeSecti
 
         unsigned min_kver = cs[i].prog_def->min_kver;
         unsigned max_kver = cs[i].prog_def->max_kver;
-        if (kernelVer < min_kver || kernelVer >= max_kver) {
+        if (programKernelVer < min_kver || programKernelVer >= max_kver) {
             ALOGD("skipping prog %s: kernel version 0x%x is outside required range [0x%x, 0x%x)",
-                  cs[i].prog_def->name(), kernelVer, min_kver, max_kver);
+                  cs[i].prog_def->name(), programKernelVer, min_kver, max_kver);
             bpf_program__set_autoload(prog, false);
             continue;
         }
@@ -1680,9 +1680,9 @@ static int doLoad(char** argv, char * const envp[]) {
     // first in U QPR2 beta~2
     const bool has_platform_netbpfload_rc = exists("/system/etc/init/netbpfload.rc");
 
-    ALOGI("NetBpfLoad (%s) api:%d/%d kver:%07x (%s) libbpf: v%u.%u uid:%d rc:%d%d",
+    ALOGI("NetBpfLoad (%s) api:%d/%d kver:%07x prog_kver:%07x (%s) libbpf: v%u.%u uid:%d rc:%d%d",
           argv[0], android_get_device_api_level(), api_level_full,
-          kernelVer, describeArch(), libbpf_major_version(),
+          kernelVer, programKernelVer, describeArch(), libbpf_major_version(),
           libbpf_minor_version(), getuid(), has_platform_bpfloader_rc,
           has_platform_netbpfload_rc);
 
